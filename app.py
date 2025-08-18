@@ -79,10 +79,11 @@ def processar_e_juntar_dados(_gdf, _ideb_df, uf_sigla):
 @st.cache_resource
 def calcular_pesos(_gdf, k):
     """Calcula e armazena em cache os diferentes tipos de matrizes de pesos."""
+    gdf_valid = _gdf[_gdf.geometry.notnull()].reset_index(drop=True)
     pesos = {
-        "Rainha": Queen.from_dataframe(_gdf),
-        "Torre": Rook.from_dataframe(_gdf),
-        f"KNN (k={k})": KNN.from_dataframe(_gdf, k=k)
+        "Rainha": Queen.from_dataframe(gdf_valid),
+        "Torre": Rook.from_dataframe(gdf_valid),
+        f"KNN (k={k})": KNN.from_dataframe(gdf_valid, k=k)
     }
     return pesos
 
@@ -113,14 +114,19 @@ if uf_selecionada:
     with st.spinner(f"Carregando e processando dados para {estados_br[uf_selecionada]}..."):
         geodados_uf = carregar_dados_geograficos(uf_selecionada)
         ideb_nacional = carregar_dados_ideb()
+        # vetor y alinhado
         dados_completos = processar_e_juntar_dados(geodados_uf, ideb_nacional, uf_selecionada) if geodados_uf is not None and ideb_nacional is not None else None
+        # --- antes de calcular os pesos ---
+        dados_completos = dados_completos.dropna(subset=['geometry']).reset_index(drop=True)
+        # garantir que só fiquem linhas com ideb válido
+        dados_completos = dados_completos[dados_completos['media_ideb'].notna()].reset_index(drop=True)
 
     if dados_completos is not None and not dados_completos.empty:
         st.header(f"Análise para: {estados_br[uf_selecionada]}")
 
         # --- 1. ANÁLISE EXPLORATÓRIA DE DADOS (EDA) ---
         st.subheader("1. Análise Exploratória de Dados (EDA)")
-        y = dados_completos['media_ideb']
+        y = dados_completos['media_ideb'].values
         media_nacional = ideb_nacional['ideb'].mean()
         
         col1, col2 = st.columns(2)
