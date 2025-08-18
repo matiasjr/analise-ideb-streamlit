@@ -1,5 +1,5 @@
 # ==============================================================================
-# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.0 - ANÁLISE COMPLETA)
+# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.1 - CORREÇÃO DE ERRO)
 # Ferramenta: Streamlit
 # Autor: Edson (com fluxo de análise e correções por Gemini)
 # ==============================================================================
@@ -48,19 +48,32 @@ def processar_e_juntar_dados(_gdf, _ideb_df, uf_sigla):
     """Filtra o IDEB para a UF, calcula médias e junta com o GeoDataFrame."""
     gdf = _gdf.copy()
     ideb_df = _ideb_df.copy()
+
     ideb_uf = ideb_df[ideb_df['UF'] == uf_sigla]
+
     if ideb_uf.empty:
         st.warning(f"Não foram encontrados dados do IDEB para o estado {uf_sigla}.")
         return None
+
     media_mat = ideb_uf.groupby('cod_mun')['nota_matem'].mean().reset_index(name='media_mat')
     media_por = ideb_uf.groupby('cod_mun')['nota_portugues'].mean().reset_index(name='media_por')
     media_ideb = ideb_uf.groupby('cod_mun')['ideb'].mean().reset_index(name='media_ideb')
+
     notas_uf = pd.merge(media_mat, media_por, on='cod_mun', how='outer')
     notas_uf = pd.merge(notas_uf, media_ideb, on='cod_mun', how='outer')
+
     gdf_final = gdf.merge(notas_uf, left_on='code_muni', right_on='cod_mun', how='left')
+
     for col in ['media_mat', 'media_por', 'media_ideb']:
-        media_estado = gdf_final[col].mean()
-        gdf_final[col].fillna(media_estado, inplace=True)
+        if not gdf_final[col].isna().all():
+            media_estado = gdf_final[col].mean()
+            gdf_final[col].fillna(media_estado, inplace=True)
+
+    # --- CORREÇÃO DO ERRO ---
+    # Resetar o índice garante que o GeoDataFrame e os dados vetoriais
+    # estarão perfeitamente alinhados para a análise espacial.
+    gdf_final = gdf_final.reset_index(drop=True)
+    
     return gdf_final
 
 @st.cache_resource
@@ -102,7 +115,7 @@ if uf_selecionada:
         ideb_nacional = carregar_dados_ideb()
         dados_completos = processar_e_juntar_dados(geodados_uf, ideb_nacional, uf_selecionada) if geodados_uf is not None and ideb_nacional is not None else None
 
-    if dados_completos is not None:
+    if dados_completos is not None and not dados_completos.empty:
         st.header(f"Análise para: {estados_br[uf_selecionada]}")
 
         # --- 1. ANÁLISE EXPLORATÓRIA DE DADOS (EDA) ---
@@ -128,23 +141,26 @@ if uf_selecionada:
         pesos_dict = calcular_pesos(dados_completos, k_selecionado)
         resultados_moran = []
         for nome, w in pesos_dict.items():
-            moran_r = Moran(y, w, permutations=999) # Padrão é transformação 'r'
-            moran_b = Moran(y, w, transformation='b', permutations=999) # Especificamos transformação 'b'
+            moran_r = Moran(y, w, permutations=999) 
+            moran_b = Moran(y, w, transformation='b', permutations=999) 
             resultados_moran.append([nome, "Padronizada ('r')", moran_r.I, moran_r.p_sim])
             resultados_moran.append([nome, "Binária ('b')", moran_b.I, moran_b.p_sim])
         df_moran = pd.DataFrame(resultados_moran, columns=["Tipo de Vizinhança", "Tipo de Matriz", "I de Moran", "P-valor"])
         st.dataframe(df_moran.style.format({'I de Moran': '{:.4f}', 'P-valor': '{:.4f}'}))
 
         # --- CONDIÇÃO PARA CONTINUAR A ANÁLISE ---
-        moran_escolhido = Moran(y, pesos_dict["Rainha"]) # Escolhemos Rainha Padronizada como método principal
+        moran_escolhido = Moran(y, pesos_dict["Rainha"]) 
         
         if moran_escolhido.I > 0 and moran_escolhido.p_sim < 0.05:
             st.success(f"O Índice de Moran Global ({moran_escolhido.I:.4f}) é positivo e estatisticamente significativo (p-valor={moran_escolhido.p_sim:.4f}). Isso confirma a existência de agrupamentos espaciais. Prosseguindo com a análise detalhada...")
             
+            w_escolhido = pesos_dict["Rainha"]
+            w_escolhido.transform = 'r' # Padroniza para os cálculos seguintes
+            
             # --- 3. CORRELOGRAMA ESPACIAL ---
             st.subheader("3. Correlograma Espacial (Vizinhança Rainha)")
             try:
-                moran_lags = [Moran(y, higher_order(pesos_dict["Rainha"], k=i)).I for i in range(1, 7)]
+                moran_lags = [Moran(y, higher_order(w_escolhido, k=i)).I for i in range(1, 7)]
                 fig, ax = plt.subplots()
                 ax.plot(range(1, 7), moran_lags, 'o-')
                 ax.axhline(0, color='grey', linestyle='--')
@@ -156,8 +172,6 @@ if uf_selecionada:
 
             # --- 4. DIAGRAMA DE ESPALHAMENTO DE MORAN ---
             st.subheader("4. Diagrama de Espalhamento de Moran")
-            w_escolhido = pesos_dict["Rainha"]
-            w_escolhido.transform = 'r'
             lag_ideb = libpysal.weights.lag_spatial(w_escolhido, y)
             fig, ax = plt.subplots()
             ax.scatter(y, lag_ideb, alpha=0.6)
@@ -173,7 +187,7 @@ if uf_selecionada:
             st.markdown("Estes mapas mostram a média das notas dos vizinhos para cada município (lag espacial). Isso ajuda a visualizar as 'ilhas' de alto e baixo desempenho e comparar se os padrões do IDEB são mais parecidos com os de Matemática ou Português.")
             dados_completos['lag_mat'] = libpysal.weights.lag_spatial(w_escolhido, dados_completos['media_mat'])
             dados_completos['lag_por'] = libpysal.weights.lag_spatial(w_escolhido, dados_completos['media_por'])
-            dados_completos['lag_ideb'] = lag_ideb # Já calculado
+            dados_completos['lag_ideb'] = lag_ideb
             
             fig, axes = plt.subplots(1, 3, figsize=(20, 6))
             for i, col in enumerate(['lag_mat', 'lag_por', 'lag_ideb']):
@@ -189,7 +203,6 @@ if uf_selecionada:
             dados_completos['quadrante'] = lisa.q
             dados_completos['valor_p'] = lisa.p_sim
 
-            # Mapa de Valores LISA
             st.markdown("**Mapa de Valores LISA (I Local)**")
             st.markdown("Este mapa mostra a intensidade do agrupamento para cada município. Valores altos (amarelo) indicam forte semelhança com os vizinhos, enquanto valores baixos (roxo) indicam dissimilaridade.")
             fig, ax = plt.subplots(figsize=(15, 10))
@@ -197,7 +210,6 @@ if uf_selecionada:
             ax.set_axis_off()
             st.pyplot(fig)
             
-            # Mapa de Clusters Significativos
             st.markdown("**Mapa de Clusters LISA Significativos**")
             st.markdown("Este é o mapa principal, mostrando apenas os agrupamentos que são estatisticamente significativos (p-valor < 0.05).")
             fig, ax = plt.subplots(figsize=(15, 10))
@@ -221,4 +233,4 @@ if uf_selecionada:
 
         # --- 7. TABELA DE DADOS ---
         with st.expander("Ver Tabela de Dados Completa"):
-            st.dataframe(dados_completos.drop(columns=['geometry', 'abbrev_state']))
+            st.dataframe(dados_completos.drop(columns=['geometry', 'abbrev_state'], errors='ignore'))
