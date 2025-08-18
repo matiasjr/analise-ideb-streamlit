@@ -48,26 +48,19 @@ def processar_e_juntar_dados(_gdf, _ideb_df, uf_sigla):
     """Filtra o IDEB para a UF, calcula médias e junta com o GeoDataFrame."""
     gdf = _gdf.copy()
     ideb_df = _ideb_df.copy()
-
     ideb_uf = ideb_df[ideb_df['UF'] == uf_sigla]
-
     if ideb_uf.empty:
         st.warning(f"Não foram encontrados dados do IDEB para o estado {uf_sigla}.")
         return None
-
     media_mat = ideb_uf.groupby('cod_mun')['nota_matem'].mean().reset_index(name='media_mat')
     media_por = ideb_uf.groupby('cod_mun')['nota_portugues'].mean().reset_index(name='media_por')
     media_ideb = ideb_uf.groupby('cod_mun')['ideb'].mean().reset_index(name='media_ideb')
-
     notas_uf = pd.merge(media_mat, media_por, on='cod_mun', how='outer')
     notas_uf = pd.merge(notas_uf, media_ideb, on='cod_mun', how='outer')
-
     gdf_final = gdf.merge(notas_uf, left_on='code_muni', right_on='cod_mun', how='left')
-
     for col in ['media_mat', 'media_por', 'media_ideb']:
         media_estado = gdf_final[col].mean()
         gdf_final[col].fillna(media_estado, inplace=True)
-
     return gdf_final
 
 @st.cache_resource
