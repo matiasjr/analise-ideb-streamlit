@@ -1,7 +1,7 @@
 # ==============================================================================
-# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 2.0)
+# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 2.1 - CORRIGIDA)
 # Ferramenta: Streamlit
-# Autor: Edson (com novas features por Gemini)
+# Autor: Edson (com novas features e correções por Gemini)
 # ==============================================================================
 
 # --- Importação das Bibliotecas ---
@@ -14,6 +14,7 @@ from libpysal.weights import Queen, Rook, KNN, higher_order
 from esda.moran import Moran, Moran_Local
 import matplotlib.pyplot as plt
 import numpy as np
+import copy # <--- ADICIONADO PARA CORRIGIR O ERRO
 
 # --- Configuração da Página ---
 st.set_page_config(layout="wide", page_title="Análise Espacial do IDEB")
@@ -50,7 +51,7 @@ def processar_e_juntar_dados(_gdf, _ideb_df, uf_sigla):
     """Filtra o IDEB para a UF, calcula médias e junta com o GeoDataFrame."""
     gdf = _gdf.copy()
     ideb_df = _ideb_df.copy()
-    
+
     ideb_uf = ideb_df[ideb_df['UF'] == uf_sigla]
 
     if ideb_uf.empty:
@@ -81,16 +82,17 @@ def calcular_pesos(_gdf, k):
         f"KNN (k={k})": KNN.from_dataframe(_gdf, k=k)
     }
     return pesos
-    
+
 def calcular_correlograma(weights, values, max_lag, binaria='r', permutations=999):
     """Calcula os valores do I de Moran para múltiplos lags espaciais."""
     moran_values = []
     p_values = []
 
     # O objeto de pesos original não deve ser modificado
-    w_copy = weights.clone()
+    # CORREÇÃO: Usando copy.deepcopy() em vez do método inexistente .clone()
+    w_copy = copy.deepcopy(weights)
     w_copy.transform = binaria
-    
+
     # Lag 1
     moran = Moran(values, w_copy, permutations=permutations)
     moran_values.append(moran.I)
@@ -154,13 +156,13 @@ if uf_selecionada:
 
     if dados_completos is not None:
         st.header(f"Análise para: {estados_br[uf_selecionada]}")
-        
+
         # --- 1. Análise Exploratória de Dados (EDA) ---
         st.markdown("### 1. Análise Exploratória de Dados (EDA)")
-        
+
         y = dados_completos[variavel_analise]
         media_nacional = ideb_nacional[variavel_analise.replace('media_', 'nota_') if 'nota' in variavel_analise else 'ideb'].mean()
-        
+
         municipio_maior_valor = dados_completos.loc[y.idxmax()]
         municipio_menor_valor = dados_completos.loc[y.idxmin()]
 
@@ -168,7 +170,7 @@ if uf_selecionada:
         col1.metric(f"Média no Estado", f"{y.mean():.2f}")
         col2.metric("Média no Brasil", f"{media_nacional:.2f}", delta=f"{y.mean() - media_nacional:.2f}")
         col3.metric("Nº de Municípios", f"{len(dados_completos)}")
-        
+
         st.info(f"📍 **Maior valor:** {municipio_maior_valor['name_muni']} ({municipio_maior_valor[variavel_analise]:.2f})")
         st.info(f"📍 **Menor valor:** {municipio_menor_valor['name_muni']} ({municipio_menor_valor[variavel_analise]:.2f})")
 
@@ -176,51 +178,51 @@ if uf_selecionada:
         # --- 2. Comparativo de Autocorrelação Global (I de Moran) ---
         st.markdown("### 2. Autocorrelação Espacial Global (Comparativo)")
         st.markdown("O I de Moran mede a clusterização geral. Abaixo, comparamos os resultados com diferentes definições de vizinhança e pesos.")
-        
+
         pesos_dict = calcular_pesos(dados_completos, k_selecionado)
-        
+
         resultados_moran = []
         for nome, w in pesos_dict.items():
             # Matriz Padronizada
-            w_r = w.clone(); w_r.transform = 'r'
+            # CORREÇÃO: Usando copy.deepcopy() em vez do método inexistente .clone()
+            w_r = copy.deepcopy(w); w_r.transform = 'r'
             moran_r = Moran(y, w_r, permutations=999)
             resultados_moran.append([nome, "Padronizada ('r')", moran_r.I, moran_r.p_sim])
 
             # Matriz Binária
-            w_b = w.clone(); w_b.transform = 'b'
+            # CORREÇÃO: Usando copy.deepcopy() em vez do método inexistente .clone()
+            w_b = copy.deepcopy(w); w_b.transform = 'b'
             moran_b = Moran(y, w_b, permutations=999)
             resultados_moran.append([nome, "Binária ('b')", moran_b.I, moran_b.p_sim])
 
         df_moran = pd.DataFrame(resultados_moran, columns=["Tipo de Vizinhança", "Tipo de Matriz", "I de Moran", "P-valor"])
         st.dataframe(df_moran.style.format({'I de Moran': '{:.4f}', 'P-valor': '{:.4f}'}))
-        
+
         # --- 3. Correlograma Espacial ---
         st.markdown("### 3. Correlograma Espacial")
         st.markdown("O correlograma mostra como a autocorrelação muda à medida que consideramos vizinhos mais distantes (lags).")
-        
-        w_base = pesos_dict["Rainha"] # Usamos Rainha como base, que é o mais comum
+
+        w_base = pesos_dict["Rainha"]
 
         try:
             with st.spinner("Calculando correlogramas..."):
                 moran_r, p_r = calcular_correlograma(w_base, y, lags_selecionados, binaria='r')
                 moran_b, p_b = calcular_correlograma(w_base, y, lags_selecionados, binaria='b')
-            
+
             fig, axes = plt.subplots(1, 2, figsize=(14, 5))
             lags = np.arange(1, lags_selecionados + 1)
-            
-            # Gráfico para matriz padronizada (W)
+
             axes[0].plot(lags, moran_r, 'o-')
             axes[0].axhline(y=0, color='gray', linestyle='--')
             axes[0].set_title("Proximidade Padronizada")
             axes[0].set_xlabel("Ordem de Vizinhança (Lag)")
             axes[0].set_ylabel("Moran's I")
-            
-            # Gráfico para matriz binária (B)
+
             axes[1].plot(lags, moran_b, 'o-')
             axes[1].axhline(y=0, color='gray', linestyle='--')
             axes[1].set_title("Proximidade Binária")
             axes[1].set_xlabel("Ordem de Vizinhança (Lag)")
-            
+
             st.pyplot(fig)
         except Exception as e:
             st.error(f"Não foi possível gerar o correlograma. Pode não haver vizinhos suficientes para os lags solicitados. Erro: {e}")
@@ -228,9 +230,8 @@ if uf_selecionada:
         # --- 4. Clusters Espaciais Locais (LISA) ---
         st.markdown("### 4. Clusters Espaciais Locais (LISA)")
         st.markdown("A análise LISA identifica a localização de clusters estatisticamente significativos, mostrando **onde** os agrupamentos acontecem.")
-        
-        # Usamos a matriz Rainha Padronizada para o LISA, que é a abordagem padrão
-        w_lisa = pesos_dict["Rainha"].clone()
+
+        w_lisa = copy.deepcopy(pesos_dict["Rainha"])
         w_lisa.transform = 'r'
         lisa = Moran_Local(y, w_lisa)
         dados_completos['quadrante'] = lisa.q
