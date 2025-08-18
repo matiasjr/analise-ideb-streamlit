@@ -126,7 +126,7 @@ if uf_selecionada:
 
         # --- 1. ANÁLISE EXPLORATÓRIA DE DADOS (EDA) ---
         st.subheader("1. Análise Exploratória de Dados (EDA)")
-        y = dados_completos['media_ideb'].values
+        y = dados_completos['media_ideb']
         media_nacional = ideb_nacional['ideb'].mean()
         
         col1, col2 = st.columns(2)
