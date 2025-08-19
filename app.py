@@ -71,7 +71,7 @@ def processar_e_juntar_dados(uf_sigla):
     for col in ['media_mat', 'media_por', 'media_ideb']:
         if not gdf_final[col].isna().all():
             media_estado = gdf_final[col].mean()
-            gdf_final[col].fillna(media_estado, inplace=True)
+            gdf_final[col] = gdf_final[col].fillna(media_estado)
 
     gdf_final = gdf_final.reset_index(drop=True)
     return gdf_final
