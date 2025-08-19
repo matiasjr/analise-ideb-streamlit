@@ -210,7 +210,7 @@ if uf_selecionada:
             
             st.pyplot(fig)
             
-            w_lisa = copy.deepcopy(w_rainha_original)
+            w_lisa = copy.deepcopy(w_escolhido_rainha)
             w_lisa.transform = 'r'
             
             # --- 4. DIAGRAMA DE ESPALHAMENTO DE MORAN ---
