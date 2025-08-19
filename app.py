@@ -95,10 +95,12 @@ def calculate_spatial_correlogram(weights, values, max_lag, binaria='r', permuta
     moran_values = []
     p_values = []
     
-    base_weights = copy.deepcopy(weights)
-
+    # --- CORREÇÃO ---
+    # A linha com copy.deepcopy foi removida. A função higher_order não modifica
+    # o objeto 'weights' original, então a cópia é desnecessária e causava o problema.
     for lag in range(1, max_lag + 1):
-        lag_W = higher_order(base_weights, lag)
+        # A função é chamada diretamente no objeto de pesos original
+        lag_W = higher_order(weights, lag)
         
         if lag_W.cardinalities.sum() > 0:
             moran = Moran(values, lag_W, transformation=binaria, permutations=permutations)
