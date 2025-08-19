@@ -102,13 +102,13 @@ def calculate_spatial_correlogram(weights, values, max_lag, binaria='r', permuta
         # A função é chamada diretamente no objeto de pesos original
         lag_W = higher_order(weights, lag)
         
-        if lag_W.cardinalities.sum() > 0:
-            moran = Moran(values, lag_W, transformation=binaria, permutations=permutations)
-            moran_values.append(moran.I)
-            p_values.append(moran.p_sim)
-        else:
-            moran_values.append(0)
-            p_values.append(1.0)
+        # if lag_W.cardinalities.sum() > 0:
+        moran = Moran(values, lag_W, transformation=binaria, permutations=permutations)
+        moran_values.append(moran.I)
+        p_values.append(moran.p_sim)
+        # else:
+        #     moran_values.append(0)
+        #     p_values.append(1.0)
             
     return moran_values, p_values
 
