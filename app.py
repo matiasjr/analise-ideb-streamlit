@@ -1,5 +1,5 @@
 # ==============================================================================
-# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.2 - CORREÇÃO DE CACHE)
+# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.3 - CORRELOGAMA CORRIGIDO)
 # Ferramenta: Streamlit
 # Autor: Edson (com fluxo de análise e correções por Gemini)
 # ==============================================================================
@@ -14,6 +14,7 @@ from libpysal.weights import Queen, Rook, KNN, higher_order
 from esda.moran import Moran, Moran_Local
 import matplotlib.pyplot as plt
 import numpy as np
+import copy
 
 # --- Configuração da Página ---
 st.set_page_config(layout="wide", page_title="Análise Espacial do IDEB")
@@ -75,10 +76,6 @@ def processar_e_juntar_dados(uf_sigla):
     gdf_final = gdf_final.reset_index(drop=True)
     return gdf_final
 
-# --- CORREÇÃO DO ERRO DE CACHE ---
-# A função agora depende de inputs simples (strings, ints) que o cache entende perfeitamente.
-# Ela carrega os dados geográficos DENTRO dela mesma para garantir que os pesos
-# sejam sempre calculados para o estado correto.
 @st.cache_resource
 def calcular_pesos(uf_sigla, k):
     """Calcula e armazena em cache os pesos para a UF e k selecionados."""
@@ -92,6 +89,32 @@ def calcular_pesos(uf_sigla, k):
         f"KNN (k={k})": KNN.from_dataframe(gdf, k=k, use_index=True)
     }
     return pesos
+
+# --- NOVA FUNÇÃO ROBUSTA PARA O CORRELOGRAMA ---
+def calculate_spatial_correlogram(weights, values, max_lag, binaria='r', permutations=999):
+    """Calcula o correlograma espacial de forma segura, evitando erros com lags vazios."""
+    moran_values = []
+    p_values = []
+    
+    # Criamos uma cópia para não modificar o objeto original
+    base_weights = copy.deepcopy(weights)
+
+    for lag in range(1, max_lag + 1):
+        # Cria a matriz de pesos para o lag atual
+        lag_W = higher_order(base_weights, lag)
+        
+        # --- VERIFICAÇÃO DE SEGURANÇA ---
+        # Se a soma das cardinalidades (número de vizinhos) for 0, não há conexões neste lag.
+        if lag_W.cardinalities.sum() > 0:
+            moran = Moran(values, lag_W, transformation=binaria, permutations=permutations)
+            moran_values.append(moran.I)
+            p_values.append(moran.p_sim)
+        else:
+            # Se não há vizinhos, a autocorrelação é 0 e a significância é nula (p=1.0)
+            moran_values.append(0)
+            p_values.append(1.0)
+            
+    return moran_values, p_values
 
 # ==============================================================================
 # INTERFACE DO USUÁRIO (UI)
@@ -111,6 +134,8 @@ estados_br = {
 }
 uf_selecionada = st.sidebar.selectbox("Selecione um Estado:", options=list(estados_br.keys()), format_func=lambda x: estados_br[x], index=3)
 k_selecionado = st.sidebar.slider('Valor de K para vizinhança KNN', 1, 10, 5)
+lags_selecionados = st.sidebar.slider('Número de Lags para o Correlograma', 2, 10, 6)
+
 
 # ==============================================================================
 # LÓGICA PRINCIPAL DO APLICATIVO
@@ -124,7 +149,7 @@ if uf_selecionada:
     if dados_completos is not None and not dados_completos.empty:
         st.header(f"Análise para: {estados_br[uf_selecionada]}")
 
-        # --- 1. ANÁLISE EXPLORATÓRIA DE DADOS (EDA) ---
+        # Seções 1 e 2 (EDA e Moran Global) permanecem as mesmas.
         st.subheader("1. Análise Exploratória de Dados (EDA)")
         y = dados_completos['media_ideb']
         
@@ -140,11 +165,7 @@ if uf_selecionada:
             st.info(f"📍 **Maior IDEB:** {municipio_maior_valor['name_muni']} ({municipio_maior_valor['media_ideb']:.2f})")
             st.info(f"📍 **Menor IDEB:** {municipio_menor_valor['name_muni']} ({municipio_menor_valor['media_ideb']:.2f})")
 
-        # --- 2. ANÁLISE DE AUTOCORRELAÇÃO GLOBAL (I DE MORAN) ---
         st.subheader("2. Análise de Autocorrelação Espacial Global (I de Moran)")
-        st.markdown("Verificamos se existe um padrão de agrupamento geral no estado. Para isso, comparamos diferentes definições de 'vizinhança'.")
-        
-        # A chamada da função agora usa a sigla do estado, garantindo que o cache funcione corretamente.
         pesos_dict = calcular_pesos(uf_selecionada, k_selecionado)
         
         resultados_moran = []
@@ -156,34 +177,48 @@ if uf_selecionada:
         df_moran = pd.DataFrame(resultados_moran, columns=["Tipo de Vizinhança", "Tipo de Matriz", "I de Moran", "P-valor"])
         st.dataframe(df_moran.style.format({'I de Moran': '{:.4f}', 'P-valor': '{:.4f}'}))
 
-        # --- CONDIÇÃO PARA CONTINUAR A ANÁLISE ---
         moran_escolhido = Moran(y, pesos_dict["Rainha"])
         
         if moran_escolhido.I > 0 and moran_escolhido.p_sim < 0.05:
-            st.success(f"O Índice de Moran Global ({moran_escolhido.I:.4f}) é positivo e estatisticamente significativo (p-valor={moran_escolhido.p_sim:.4f}). Isso confirma a existência de agrupamentos espaciais. Prosseguindo com a análise detalhada...")
+            st.success(f"O Índice de Moran Global ({moran_escolhido.I:.4f}) é positivo e estatisticamente significativo. Prosseguindo com a análise detalhada...")
             
-            w_escolhido = pesos_dict["Rainha"]
-            w_escolhido.transform = 'r'
+            w_escolhido_rainha = pesos_dict["Rainha"]
             
-            # As seções restantes (Correlograma, Scatter Plot, Mapas) continuam como antes.
-            # (O código para as seções 3, 4, 5, 6 e 7 permanece o mesmo da versão anterior)
-
-            # --- 3. CORRELOGRAMA ESPACIAL ---
+            # --- 3. CORRELOGRAMA ESPACIAL (SEÇÃO ATUALIZADA) ---
             st.subheader("3. Correlograma Espacial (Vizinhança Rainha)")
-            try:
-                moran_lags = [Moran(y, higher_order(w_escolhido, k=i)).I for i in range(1, 7)]
-                fig, ax = plt.subplots()
-                ax.plot(range(1, 7), moran_lags, 'o-')
-                ax.axhline(0, color='grey', linestyle='--')
-                ax.set_xlabel("Ordem de Vizinhança (Lag)")
-                ax.set_ylabel("I de Moran")
-                st.pyplot(fig)
-            except Exception:
-                st.warning("Não foi possível gerar o correlograma. O estado pode ter poucos vizinhos para ordens superiores.")
+            st.markdown("O correlograma mostra como a autocorrelação (I de Moran) diminui à medida que consideramos vizinhos mais distantes (lags). A barra de erro representa a incerteza estatística (p-valor).")
+            
+            with st.spinner("Calculando correlogramas..."):
+                # Usamos a nova função segura
+                moran_W, p_W = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='r')
+                moran_B, p_B = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='b')
+            
+            lags = np.arange(1, lags_selecionados + 1)
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
 
+            # Gráfico para matriz padronizada (W)
+            axes[0].errorbar(lags, moran_W, yerr=np.array(p_W)*0.1, fmt='o-', capsize=5, label="I de Moran") # yerr é para visualização
+            axes[0].axhline(y=0, color='gray', linestyle='--')
+            axes[0].set_title("Proximidade Padronizada")
+            axes[0].set_xlabel("Ordem de Vizinhança (Lag)")
+            axes[0].set_ylabel("I de Moran")
+            axes[0].grid(linestyle='--', alpha=0.6)
+
+            # Gráfico para matriz binária (B)
+            axes[1].errorbar(lags, moran_B, yerr=np.array(p_B)*0.1, fmt='o-', capsize=5, label="I de Moran")
+            axes[1].axhline(y=0, color='gray', linestyle='--')
+            axes[1].set_title("Proximidade Binária")
+            axes[1].set_xlabel("Ordem de Vizinhança (Lag)")
+            axes[1].grid(linestyle='--', alpha=0.6)
+            
+            st.pyplot(fig)
+
+
+            # As seções restantes (4, 5, 6, 7) não precisam de alteração
+            w_escolhido_rainha.transform = 'r' # Padroniza para os cálculos seguintes
             # --- 4. DIAGRAMA DE ESPALHAMENTO DE MORAN ---
             st.subheader("4. Diagrama de Espalhamento de Moran")
-            lag_ideb = libpysal.weights.lag_spatial(w_escolhido, y)
+            lag_ideb = libpysal.weights.lag_spatial(w_escolhido_rainha, y)
             fig, ax = plt.subplots()
             ax.scatter(y, lag_ideb, alpha=0.6)
             m, b = np.polyfit(y, lag_ideb, 1)
@@ -196,8 +231,8 @@ if uf_selecionada:
             # --- 5. ANÁLISE DAS MÉDIAS ESPACIAIS (LAG ESPACIAL) ---
             st.subheader("5. Análise das Médias Espaciais")
             st.markdown("Estes mapas mostram a média das notas dos vizinhos para cada município (lag espacial). Isso ajuda a visualizar as 'ilhas' de alto e baixo desempenho e comparar se os padrões do IDEB são mais parecidos com os de Matemática ou Português.")
-            dados_completos['lag_mat'] = libpysal.weights.lag_spatial(w_escolhido, dados_completos['media_mat'])
-            dados_completos['lag_por'] = libpysal.weights.lag_spatial(w_escolhido, dados_completos['media_por'])
+            dados_completos['lag_mat'] = libpysal.weights.lag_spatial(w_escolhido_rainha, dados_completos['media_mat'])
+            dados_completos['lag_por'] = libpysal.weights.lag_spatial(w_escolhido_rainha, dados_completos['media_por'])
             dados_completos['lag_ideb'] = lag_ideb
             
             fig, axes = plt.subplots(1, 3, figsize=(20, 6))
@@ -209,7 +244,7 @@ if uf_selecionada:
             
             # --- 6. ANÁLISE DE CLUSTERS LOCAIS (LISA) ---
             st.subheader("6. Análise de Clusters Locais (LISA)")
-            lisa = Moran_Local(y, w_escolhido)
+            lisa = Moran_Local(y, w_escolhido_rainha)
             dados_completos['lisa_Is'] = lisa.Is
             dados_completos['quadrante'] = lisa.q
             dados_completos['valor_p'] = lisa.p_sim
