@@ -180,15 +180,17 @@ if uf_selecionada:
         if moran_escolhido.I > 0 and moran_escolhido.p_sim < 0.05:
             st.success(f"O Índice de Moran Global ({moran_escolhido.I:.4f}) é positivo e estatisticamente significativo. Prosseguindo com a análise detalhada...")
             
-            w_rainha_original = pesos_dict["Rainha"]
+            # w_rainha_original = pesos_dict["Rainha"]
+            am_muni = carregar_dados_geograficos(uf_selecionada)
+            w_escolhido_rainha = Queen.from_dataframe(am_muni, use_index=True)
             
             # --- 3. CORRELOGRAMA ESPACIAL ---
             st.subheader("3. Correlograma Espacial (Vizinhança Rainha)")
             st.markdown("O correlograma mostra como a autocorrelação (I de Moran) diminui à medida que consideramos vizinhos mais distantes (lags).")
             
             with st.spinner("Calculando correlogramas..."):
-                moran_W, p_W = calculate_spatial_correlogram(w_rainha_original, y, lags_selecionados, binaria='r')
-                moran_B, p_B = calculate_spatial_correlogram(w_rainha_original, y, lags_selecionados, binaria='b')
+                moran_W, p_W = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='r')
+                moran_B, p_B = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='b')
             
             lags = np.arange(1, lags_selecionados + 1)
             fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
