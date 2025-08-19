@@ -186,8 +186,8 @@ if uf_selecionada:
             
             with st.spinner("Calculando correlogramas..."):
                 # A função agora é chamada com a matriz de pesos original (não transformada)
-                moran_W, p_W = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='r')
-                moran_B, p_B = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='b')
+                moran_W, p_W = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, permutations=999, binaria='r')
+                moran_B, p_B = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, permutations=999, binaria='b')
             
             lags = np.arange(1, lags_selecionados + 1)
             fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
