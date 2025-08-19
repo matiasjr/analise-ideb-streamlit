@@ -1,5 +1,5 @@
 # ==============================================================================
-# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.1 - CORREÇÃO DE ERRO)
+# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.2 - CORREÇÃO DE CACHE)
 # Ferramenta: Streamlit
 # Autor: Edson (com fluxo de análise e correções por Gemini)
 # ==============================================================================
@@ -26,7 +26,7 @@ st.set_page_config(layout="wide", page_title="Análise Espacial do IDEB")
 def carregar_dados_geograficos(uf_sigla):
     """Carrega os dados geográficos para a UF selecionada."""
     try:
-        gdf = geobr.read_municipality(code_muni=uf_sigla, year=2019).to_crs("EPSG:4326")
+        gdf = geobr.read_municipality(code_muni=uf_sigla, year=2020).to_crs("EPSG:4326")
         return gdf
     except Exception as e:
         st.error(f"Não foi possível carregar os dados geográficos para {uf_sigla}. Erro: {e}")
@@ -44,10 +44,13 @@ def carregar_dados_ideb():
         return None
 
 @st.cache_data
-def processar_e_juntar_dados(_gdf, _ideb_df, uf_sigla):
-    """Filtra o IDEB para a UF, calcula médias e junta com o GeoDataFrame."""
-    gdf = _gdf.copy()
-    ideb_df = _ideb_df.copy()
+def processar_e_juntar_dados(uf_sigla):
+    """Função única para carregar, processar e juntar todos os dados para um estado."""
+    gdf = carregar_dados_geograficos(uf_sigla)
+    ideb_df = carregar_dados_ideb()
+
+    if gdf is None or ideb_df is None:
+        return None
 
     ideb_uf = ideb_df[ideb_df['UF'] == uf_sigla]
 
@@ -69,21 +72,24 @@ def processar_e_juntar_dados(_gdf, _ideb_df, uf_sigla):
             media_estado = gdf_final[col].mean()
             gdf_final[col].fillna(media_estado, inplace=True)
 
-    # --- CORREÇÃO DO ERRO ---
-    # Resetar o índice garante que o GeoDataFrame e os dados vetoriais
-    # estarão perfeitamente alinhados para a análise espacial.
     gdf_final = gdf_final.reset_index(drop=True)
-    
     return gdf_final
 
+# --- CORREÇÃO DO ERRO DE CACHE ---
+# A função agora depende de inputs simples (strings, ints) que o cache entende perfeitamente.
+# Ela carrega os dados geográficos DENTRO dela mesma para garantir que os pesos
+# sejam sempre calculados para o estado correto.
 @st.cache_resource
-def calcular_pesos(_gdf, k):
-    """Calcula e armazena em cache os diferentes tipos de matrizes de pesos."""
-    gdf_valid = _gdf[_gdf.geometry.notnull()].reset_index(drop=True)
+def calcular_pesos(uf_sigla, k):
+    """Calcula e armazena em cache os pesos para a UF e k selecionados."""
+    gdf = carregar_dados_geograficos(uf_sigla)
+    if gdf is None:
+        return None
+    
     pesos = {
-        "Rainha": Queen.from_dataframe(gdf_valid),
-        "Torre": Rook.from_dataframe(gdf_valid),
-        f"KNN (k={k})": KNN.from_dataframe(gdf_valid, k=k)
+        "Rainha": Queen.from_dataframe(gdf),
+        "Torre": Rook.from_dataframe(gdf),
+        f"KNN (k={k})": KNN.from_dataframe(gdf, k=k)
     }
     return pesos
 
@@ -111,15 +117,9 @@ k_selecionado = st.sidebar.slider('Valor de K para vizinhança KNN', 1, 10, 5)
 # ==============================================================================
 
 if uf_selecionada:
-    with st.spinner(f"Carregando e processando dados para {estados_br[uf_selecionada]}..."):
-        geodados_uf = carregar_dados_geograficos(uf_selecionada)
+    with st.spinner(f"Processando dados para {estados_br[uf_selecionada]}..."):
+        dados_completos = processar_e_juntar_dados(uf_selecionada)
         ideb_nacional = carregar_dados_ideb()
-        # vetor y alinhado
-        dados_completos = processar_e_juntar_dados(geodados_uf, ideb_nacional, uf_selecionada) if geodados_uf is not None and ideb_nacional is not None else None
-        # --- antes de calcular os pesos ---
-        dados_completos = dados_completos.dropna(subset=['geometry']).reset_index(drop=True)
-        # garantir que só fiquem linhas com ideb válido
-        dados_completos = dados_completos[dados_completos['media_ideb'].notna()].reset_index(drop=True)
 
     if dados_completos is not None and not dados_completos.empty:
         st.header(f"Análise para: {estados_br[uf_selecionada]}")
@@ -127,12 +127,11 @@ if uf_selecionada:
         # --- 1. ANÁLISE EXPLORATÓRIA DE DADOS (EDA) ---
         st.subheader("1. Análise Exploratória de Dados (EDA)")
         y = dados_completos['media_ideb']
-        media_nacional = ideb_nacional['ideb'].mean()
         
         col1, col2 = st.columns(2)
         with col1:
             st.metric(f"Média do IDEB no Estado", f"{y.mean():.2f}")
-            st.metric("Média do IDEB no Brasil", f"{media_nacional:.2f}", delta=f"{y.mean() - media_nacional:.2f}")
+            st.metric("Média do IDEB no Brasil", f"{ideb_nacional['ideb'].mean():.2f}", delta=f"{y.mean() - ideb_nacional['ideb'].mean():.2f}")
             st.metric("Desvio Padrão no Estado", f"{y.std():.2f}")
         with col2:
             municipio_maior_valor = dados_completos.loc[y.idxmax()]
@@ -144,25 +143,31 @@ if uf_selecionada:
         # --- 2. ANÁLISE DE AUTOCORRELAÇÃO GLOBAL (I DE MORAN) ---
         st.subheader("2. Análise de Autocorrelação Espacial Global (I de Moran)")
         st.markdown("Verificamos se existe um padrão de agrupamento geral no estado. Para isso, comparamos diferentes definições de 'vizinhança'.")
-        pesos_dict = calcular_pesos(dados_completos, k_selecionado)
+        
+        # A chamada da função agora usa a sigla do estado, garantindo que o cache funcione corretamente.
+        pesos_dict = calcular_pesos(uf_selecionada, k_selecionado)
+        
         resultados_moran = []
         for nome, w in pesos_dict.items():
-            moran_r = Moran(y, w, permutations=999) 
-            moran_b = Moran(y, w, transformation='b', permutations=999) 
+            moran_r = Moran(y, w, permutations=999)
+            moran_b = Moran(y, w, transformation='b', permutations=999)
             resultados_moran.append([nome, "Padronizada ('r')", moran_r.I, moran_r.p_sim])
             resultados_moran.append([nome, "Binária ('b')", moran_b.I, moran_b.p_sim])
         df_moran = pd.DataFrame(resultados_moran, columns=["Tipo de Vizinhança", "Tipo de Matriz", "I de Moran", "P-valor"])
         st.dataframe(df_moran.style.format({'I de Moran': '{:.4f}', 'P-valor': '{:.4f}'}))
 
         # --- CONDIÇÃO PARA CONTINUAR A ANÁLISE ---
-        moran_escolhido = Moran(y, pesos_dict["Rainha"]) 
+        moran_escolhido = Moran(y, pesos_dict["Rainha"])
         
         if moran_escolhido.I > 0 and moran_escolhido.p_sim < 0.05:
             st.success(f"O Índice de Moran Global ({moran_escolhido.I:.4f}) é positivo e estatisticamente significativo (p-valor={moran_escolhido.p_sim:.4f}). Isso confirma a existência de agrupamentos espaciais. Prosseguindo com a análise detalhada...")
             
             w_escolhido = pesos_dict["Rainha"]
-            w_escolhido.transform = 'r' # Padroniza para os cálculos seguintes
+            w_escolhido.transform = 'r'
             
+            # As seções restantes (Correlograma, Scatter Plot, Mapas) continuam como antes.
+            # (O código para as seções 3, 4, 5, 6 e 7 permanece o mesmo da versão anterior)
+
             # --- 3. CORRELOGRAMA ESPACIAL ---
             st.subheader("3. Correlograma Espacial (Vizinhança Rainha)")
             try:
