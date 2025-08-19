@@ -178,7 +178,9 @@ if uf_selecionada:
         if moran_escolhido.I > 0 and moran_escolhido.p_sim < 0.05:
             st.success(f"O Índice de Moran Global ({moran_escolhido.I:.4f}) é positivo e estatisticamente significativo. Prosseguindo com a análise detalhada...")
             
-            w_escolhido_rainha = pesos_dict["Rainha"]
+            # w_escolhido_rainha = pesos_dict["Rainha"]
+            am_muni = carregar_dados_geograficos(uf_selecionada)
+            w_escolhido_rainha = Queen.from_dataframe(am_muni, use_index=True)
             
             # --- 3. CORRELOGRAMA ESPACIAL (SEÇÃO ATUALIZADA) ---
             st.subheader("3. Correlograma Espacial (Vizinhança Rainha)")
