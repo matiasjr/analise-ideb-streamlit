@@ -1,5 +1,5 @@
 # ==============================================================================
-# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 4.0 - CORREÇÃO DEFINITIVA)
+# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 4.1 - AJUSTE FINAL)
 # Ferramenta: Streamlit
 # Autor: Edson (com fluxo de análise e correções por Gemini)
 # ==============================================================================
@@ -96,11 +96,9 @@ def calculate_spatial_correlogram(weights, values, max_lag, binaria='r', permuta
     p_values = []
     
     for lag in range(1, max_lag + 1):
-        # A função é chamada diretamente no objeto de pesos original (não transformado)
         lag_W = higher_order(weights, lag)
         
         if lag_W.cardinalities.sum() > 0:
-            # A transformação é feita temporariamente dentro da função Moran
             moran = Moran(values, lag_W, transformation=binaria, permutations=permutations)
             moran_values.append(moran.I)
             p_values.append(moran.p_sim)
@@ -168,7 +166,7 @@ if uf_selecionada:
         
         resultados_moran = []
         for nome, w in pesos_dict.items():
-            moran_r = Moran(y, w) # Padrão já é 'r'
+            moran_r = Moran(y, w)
             moran_b = Moran(y, w, transformation='b')
             resultados_moran.append([nome, "Padronizada ('r')", moran_r.I, moran_r.p_sim])
             resultados_moran.append([nome, "Binária ('b')", moran_b.I, moran_b.p_sim])
@@ -180,17 +178,19 @@ if uf_selecionada:
         if moran_escolhido.I > 0 and moran_escolhido.p_sim < 0.05:
             st.success(f"O Índice de Moran Global ({moran_escolhido.I:.4f}) é positivo e estatisticamente significativo. Prosseguindo com a análise detalhada...")
             
-            # Pega o objeto de pesos original (não transformado)
-            w_rainha_original = pesos_dict["Rainha"]
+            # --- AJUSTE SUGERIDO PELO USUÁRIO E APLICADO ---
+            # Para garantir que a matriz de pesos para o correlograma esteja em seu estado
+            # original, nós a recarregamos aqui. A função é cacheada, então não há custo de performance.
+            am_muni = carregar_dados_geograficos(uf_selecionada)
+            w_escolhido_rainha = Queen.from_dataframe(am_muni, use_index=True)
             
             # --- 3. CORRELOGRAMA ESPACIAL ---
             st.subheader("3. Correlograma Espacial (Vizinhança Rainha)")
             st.markdown("O correlograma mostra como a autocorrelação (I de Moran) diminui à medida que consideramos vizinhos mais distantes (lags).")
             
             with st.spinner("Calculando correlogramas..."):
-                # A função é chamada com a matriz de pesos original e não transformada
-                moran_W, p_W = calculate_spatial_correlogram(w_rainha_original, y, lags_selecionados, binaria='r')
-                moran_B, p_B = calculate_spatial_correlogram(w_rainha_original, y, lags_selecionados, binaria='b')
+                moran_W, p_W = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='r')
+                moran_B, p_B = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='b')
             
             lags = np.arange(1, lags_selecionados + 1)
             fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
@@ -209,16 +209,13 @@ if uf_selecionada:
             axes[1].grid(linestyle='--', alpha=0.6)
             
             st.pyplot(fig)
-
-            # --- PREPARAÇÃO PARA ANÁLISES SEGUINTES ---
-            # Criamos uma CÓPIA do objeto de pesos e a transformamos para 'r'.
-            # Isso garante que o objeto original no cache permaneça intacto.
-            w_lisa = copy.deepcopy(w_rainha_original)
-            w_lisa.transform = 'r'
+            
+            # Prepara a matriz para as análises seguintes
+            w_escolhido_rainha.transform = 'r'
             
             # --- 4. DIAGRAMA DE ESPALHAMENTO DE MORAN ---
             st.subheader("4. Diagrama de Espalhamento de Moran")
-            lag_ideb = libpysal.weights.lag_spatial(w_lisa, y)
+            lag_ideb = libpysal.weights.lag_spatial(w_escolhido_rainha, y)
             fig, ax = plt.subplots()
             ax.scatter(y, lag_ideb, alpha=0.6)
             m, b = np.polyfit(y, lag_ideb, 1)
@@ -231,8 +228,8 @@ if uf_selecionada:
             # --- 5. ANÁLISE DAS MÉDIAS ESPACIAIS (LAG ESPACIAL) ---
             st.subheader("5. Análise das Médias Espaciais")
             st.markdown("Estes mapas mostram a média das notas dos vizinhos para cada município (lag espacial).")
-            dados_completos['lag_mat'] = libpysal.weights.lag_spatial(w_lisa, dados_completos['media_mat'])
-            dados_completos['lag_por'] = libpysal.weights.lag_spatial(w_lisa, dados_completos['media_por'])
+            dados_completos['lag_mat'] = libpysal.weights.lag_spatial(w_escolhido_rainha, dados_completos['media_mat'])
+            dados_completos['lag_por'] = libpysal.weights.lag_spatial(w_escolhido_rainha, dados_completos['media_por'])
             dados_completos['lag_ideb'] = lag_ideb
             
             fig, axes = plt.subplots(1, 3, figsize=(20, 6))
@@ -244,7 +241,7 @@ if uf_selecionada:
             
             # --- 6. ANÁLISE DE CLUSTERS LOCAIS (LISA) ---
             st.subheader("6. Análise de Clusters Locais (LISA)")
-            lisa = Moran_Local(y, w_lisa)
+            lisa = Moran_Local(y, w_escolhido_rainha)
             dados_completos['lisa_Is'] = lisa.Is
             dados_completos['quadrante'] = lisa.q
             dados_completos['valor_p'] = lisa.p_sim
