@@ -1,5 +1,5 @@
 # ==============================================================================
-# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.3 - CORRELOGAMA CORRIGIDO)
+# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.4 - CORREÇÃO FINAL)
 # Ferramenta: Streamlit
 # Autor: Edson (com fluxo de análise e correções por Gemini)
 # ==============================================================================
@@ -90,27 +90,21 @@ def calcular_pesos(uf_sigla, k):
     }
     return pesos
 
-# --- NOVA FUNÇÃO ROBUSTA PARA O CORRELOGRAMA ---
 def calculate_spatial_correlogram(weights, values, max_lag, binaria='r', permutations=999):
     """Calcula o correlograma espacial de forma segura, evitando erros com lags vazios."""
     moran_values = []
     p_values = []
     
-    # Criamos uma cópia para não modificar o objeto original
     base_weights = copy.deepcopy(weights)
 
     for lag in range(1, max_lag + 1):
-        # Cria a matriz de pesos para o lag atual
         lag_W = higher_order(base_weights, lag)
         
-        # --- VERIFICAÇÃO DE SEGURANÇA ---
-        # Se a soma das cardinalidades (número de vizinhos) for 0, não há conexões neste lag.
         if lag_W.cardinalities.sum() > 0:
             moran = Moran(values, lag_W, transformation=binaria, permutations=permutations)
             moran_values.append(moran.I)
             p_values.append(moran.p_sim)
         else:
-            # Se não há vizinhos, a autocorrelação é 0 e a significância é nula (p=1.0)
             moran_values.append(0)
             p_values.append(1.0)
             
@@ -149,7 +143,7 @@ if uf_selecionada:
     if dados_completos is not None and not dados_completos.empty:
         st.header(f"Análise para: {estados_br[uf_selecionada]}")
 
-        # Seções 1 e 2 (EDA e Moran Global) permanecem as mesmas.
+        # Seções 1 e 2
         st.subheader("1. Análise Exploratória de Dados (EDA)")
         y = dados_completos['media_ideb']
         
@@ -189,23 +183,21 @@ if uf_selecionada:
             st.markdown("O correlograma mostra como a autocorrelação (I de Moran) diminui à medida que consideramos vizinhos mais distantes (lags). A barra de erro representa a incerteza estatística (p-valor).")
             
             with st.spinner("Calculando correlogramas..."):
-                # Usamos a nova função segura
+                # A função agora é chamada com a matriz de pesos original (não transformada)
                 moran_W, p_W = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='r')
                 moran_B, p_B = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='b')
             
             lags = np.arange(1, lags_selecionados + 1)
             fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
 
-            # Gráfico para matriz padronizada (W)
-            axes[0].errorbar(lags, moran_W, yerr=np.array(p_W)*0.1, fmt='o-', capsize=5, label="I de Moran") # yerr é para visualização
+            axes[0].errorbar(lags, moran_W, yerr=np.array(p_W)*0.1, fmt='o-', capsize=5)
             axes[0].axhline(y=0, color='gray', linestyle='--')
             axes[0].set_title("Proximidade Padronizada")
             axes[0].set_xlabel("Ordem de Vizinhança (Lag)")
             axes[0].set_ylabel("I de Moran")
             axes[0].grid(linestyle='--', alpha=0.6)
 
-            # Gráfico para matriz binária (B)
-            axes[1].errorbar(lags, moran_B, yerr=np.array(p_B)*0.1, fmt='o-', capsize=5, label="I de Moran")
+            axes[1].errorbar(lags, moran_B, yerr=np.array(p_B)*0.1, fmt='o-', capsize=5)
             axes[1].axhline(y=0, color='gray', linestyle='--')
             axes[1].set_title("Proximidade Binária")
             axes[1].set_xlabel("Ordem de Vizinhança (Lag)")
@@ -213,9 +205,11 @@ if uf_selecionada:
             
             st.pyplot(fig)
 
-
-            # As seções restantes (4, 5, 6, 7) não precisam de alteração
-            w_escolhido_rainha.transform = 'r' # Padroniza para os cálculos seguintes
+            # --- CORREÇÃO IMPORTANTE ---
+            # A transformação da matriz de pesos agora é feita DEPOIS do correlograma,
+            # para ser usada nas análises seguintes que dependem dela.
+            w_escolhido_rainha.transform = 'r'
+            
             # --- 4. DIAGRAMA DE ESPALHAMENTO DE MORAN ---
             st.subheader("4. Diagrama de Espalhamento de Moran")
             lag_ideb = libpysal.weights.lag_spatial(w_escolhido_rainha, y)
