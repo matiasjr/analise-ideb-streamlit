@@ -1,5 +1,5 @@
 # ==============================================================================
-# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 3.6 - EDA ATUALIZADA)
+# APLICATIVO WEB DE ANÁLISE ESPACIAL DO IDEB (VERSÃO 4.0 - CORREÇÃO DEFINITIVA)
 # Ferramenta: Streamlit
 # Autor: Edson (com fluxo de análise e correções por Gemini)
 # ==============================================================================
@@ -14,6 +14,7 @@ from libpysal.weights import Queen, Rook, KNN, higher_order
 from esda.moran import Moran, Moran_Local
 import matplotlib.pyplot as plt
 import numpy as np
+import copy
 
 # --- Configuração da Página ---
 st.set_page_config(layout="wide", page_title="Análise Espacial do IDEB")
@@ -26,7 +27,6 @@ st.set_page_config(layout="wide", page_title="Análise Espacial do IDEB")
 def carregar_dados_geograficos(uf_sigla):
     """Carrega os dados geográficos para a UF selecionada."""
     try:
-        # Usando year=2020 para dados mais recentes do geobr
         gdf = geobr.read_municipality(code_muni=uf_sigla, year=2020).to_crs("EPSG:4326")
         return gdf
     except Exception as e:
@@ -83,7 +83,6 @@ def calcular_pesos(uf_sigla, k):
     if gdf is None:
         return None
     
-    # use_index=True é uma boa prática para garantir o alinhamento
     pesos = {
         "Rainha": Queen.from_dataframe(gdf, use_index=True),
         "Torre": Rook.from_dataframe(gdf, use_index=True),
@@ -97,15 +96,15 @@ def calculate_spatial_correlogram(weights, values, max_lag, binaria='r', permuta
     p_values = []
     
     for lag in range(1, max_lag + 1):
+        # A função é chamada diretamente no objeto de pesos original (não transformado)
         lag_W = higher_order(weights, lag)
         
-        # Verificação de segurança reativada para evitar que o app quebre
         if lag_W.cardinalities.sum() > 0:
+            # A transformação é feita temporariamente dentro da função Moran
             moran = Moran(values, lag_W, transformation=binaria, permutations=permutations)
             moran_values.append(moran.I)
             p_values.append(moran.p_sim)
         else:
-            # Se não há vizinhos, a autocorrelação é 0 e a significância é nula (p=1.0)
             moran_values.append(0)
             p_values.append(1.0)
             
@@ -144,7 +143,7 @@ if uf_selecionada:
     if dados_completos is not None and not dados_completos.empty:
         st.header(f"Análise para: {estados_br[uf_selecionada]}")
 
-        # --- 1. ANÁLISE EXPLORATÓRIA DE DADOS (EDA) - ATUALIZADA ---
+        # Seções 1 e 2
         st.subheader("1. Análise Exploratória de Dados (EDA)")
         y = dados_completos['media_ideb']
         
@@ -152,28 +151,25 @@ if uf_selecionada:
         with col1:
             st.metric("Total de Municípios", f"{len(dados_completos)}")
             st.metric(f"Média do IDEB no Estado", f"{y.mean():.2f}")
-            st.metric("Mediana do IDEB no Estado", f"{y.median():.2f}")
-            
         with col2:
+            st.metric("Mediana do IDEB no Estado", f"{y.median():.2f}")
+            st.metric("Moda do IDEB no Estado", f"{y.mode()[0]:.2f}")
+        with col3:
             st.metric("Média do IDEB no Brasil", f"{ideb_nacional['ideb'].mean():.2f}", delta=f"{y.mean() - ideb_nacional['ideb'].mean():.2f}")
             st.metric("Desvio Padrão no Estado", f"{y.std():.2f}")
-            # .mode() retorna uma série, pegamos o primeiro valor com [0]
-            st.metric("Moda do IDEB no Estado", f"{y.mode()[0]:.2f}")
-            
-        with col3:
-            municipio_maior_valor = dados_completos.loc[y.idxmax()]
-            municipio_menor_valor = dados_completos.loc[y.idxmin()]
-            st.info(f"📍 **Maior IDEB:**\n{municipio_maior_valor['name_muni']} ({municipio_maior_valor['media_ideb']:.2f})")
-            st.info(f"📍 **Menor IDEB:**\n{municipio_menor_valor['name_muni']} ({municipio_menor_valor['media_ideb']:.2f})")
+        
+        municipio_maior_valor = dados_completos.loc[y.idxmax()]
+        municipio_menor_valor = dados_completos.loc[y.idxmin()]
+        st.info(f"📍 **Maior IDEB:** {municipio_maior_valor['name_muni']} ({municipio_maior_valor['media_ideb']:.2f})")
+        st.info(f"📍 **Menor IDEB:** {municipio_menor_valor['name_muni']} ({municipio_menor_valor['media_ideb']:.2f})")
 
-        # --- 2. ANÁLISE DE AUTOCORRELAÇÃO GLOBAL (I DE MORAN) ---
         st.subheader("2. Análise de Autocorrelação Espacial Global (I de Moran)")
         pesos_dict = calcular_pesos(uf_selecionada, k_selecionado)
         
         resultados_moran = []
         for nome, w in pesos_dict.items():
-            moran_r = Moran(y, w, permutations=999)
-            moran_b = Moran(y, w, transformation='b', permutations=999)
+            moran_r = Moran(y, w) # Padrão já é 'r'
+            moran_b = Moran(y, w, transformation='b')
             resultados_moran.append([nome, "Padronizada ('r')", moran_r.I, moran_r.p_sim])
             resultados_moran.append([nome, "Binária ('b')", moran_b.I, moran_b.p_sim])
         df_moran = pd.DataFrame(resultados_moran, columns=["Tipo de Vizinhança", "Tipo de Matriz", "I de Moran", "P-valor"])
@@ -184,27 +180,29 @@ if uf_selecionada:
         if moran_escolhido.I > 0 and moran_escolhido.p_sim < 0.05:
             st.success(f"O Índice de Moran Global ({moran_escolhido.I:.4f}) é positivo e estatisticamente significativo. Prosseguindo com a análise detalhada...")
             
-            w_escolhido_rainha = pesos_dict["Rainha"]
+            # Pega o objeto de pesos original (não transformado)
+            w_rainha_original = pesos_dict["Rainha"]
             
             # --- 3. CORRELOGRAMA ESPACIAL ---
             st.subheader("3. Correlograma Espacial (Vizinhança Rainha)")
-            st.markdown("O correlograma mostra como a autocorrelação (I de Moran) diminui à medida que consideramos vizinhos mais distantes (lags). A barra de erro representa a incerteza estatística (p-valor).")
+            st.markdown("O correlograma mostra como a autocorrelação (I de Moran) diminui à medida que consideramos vizinhos mais distantes (lags).")
             
             with st.spinner("Calculando correlogramas..."):
-                moran_W, p_W = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='r')
-                moran_B, p_B = calculate_spatial_correlogram(w_escolhido_rainha, y, lags_selecionados, binaria='b')
+                # A função é chamada com a matriz de pesos original e não transformada
+                moran_W, p_W = calculate_spatial_correlogram(w_rainha_original, y, lags_selecionados, binaria='r')
+                moran_B, p_B = calculate_spatial_correlogram(w_rainha_original, y, lags_selecionados, binaria='b')
             
             lags = np.arange(1, lags_selecionados + 1)
             fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
 
-            axes[0].errorbar(lags, moran_W, yerr=np.array(p_W)*0.1, fmt='o-', capsize=5)
+            axes[0].plot(lags, moran_W, 'o-')
             axes[0].axhline(y=0, color='gray', linestyle='--')
             axes[0].set_title("Proximidade Padronizada")
             axes[0].set_xlabel("Ordem de Vizinhança (Lag)")
             axes[0].set_ylabel("I de Moran")
             axes[0].grid(linestyle='--', alpha=0.6)
 
-            axes[1].errorbar(lags, moran_B, yerr=np.array(p_B)*0.1, fmt='o-', capsize=5)
+            axes[1].plot(lags, moran_B, 'o-')
             axes[1].axhline(y=0, color='gray', linestyle='--')
             axes[1].set_title("Proximidade Binária")
             axes[1].set_xlabel("Ordem de Vizinhança (Lag)")
@@ -212,11 +210,15 @@ if uf_selecionada:
             
             st.pyplot(fig)
 
-            w_escolhido_rainha.transform = 'r'
+            # --- PREPARAÇÃO PARA ANÁLISES SEGUINTES ---
+            # Criamos uma CÓPIA do objeto de pesos e a transformamos para 'r'.
+            # Isso garante que o objeto original no cache permaneça intacto.
+            w_lisa = copy.deepcopy(w_rainha_original)
+            w_lisa.transform = 'r'
             
             # --- 4. DIAGRAMA DE ESPALHAMENTO DE MORAN ---
             st.subheader("4. Diagrama de Espalhamento de Moran")
-            lag_ideb = libpysal.weights.lag_spatial(w_escolhido_rainha, y)
+            lag_ideb = libpysal.weights.lag_spatial(w_lisa, y)
             fig, ax = plt.subplots()
             ax.scatter(y, lag_ideb, alpha=0.6)
             m, b = np.polyfit(y, lag_ideb, 1)
@@ -228,9 +230,9 @@ if uf_selecionada:
 
             # --- 5. ANÁLISE DAS MÉDIAS ESPACIAIS (LAG ESPACIAL) ---
             st.subheader("5. Análise das Médias Espaciais")
-            st.markdown("Estes mapas mostram a média das notas dos vizinhos para cada município (lag espacial). Isso ajuda a visualizar as 'ilhas' de alto e baixo desempenho e comparar se os padrões do IDEB são mais parecidos com os de Matemática ou Português.")
-            dados_completos['lag_mat'] = libpysal.weights.lag_spatial(w_escolhido_rainha, dados_completos['media_mat'])
-            dados_completos['lag_por'] = libpysal.weights.lag_spatial(w_escolhido_rainha, dados_completos['media_por'])
+            st.markdown("Estes mapas mostram a média das notas dos vizinhos para cada município (lag espacial).")
+            dados_completos['lag_mat'] = libpysal.weights.lag_spatial(w_lisa, dados_completos['media_mat'])
+            dados_completos['lag_por'] = libpysal.weights.lag_spatial(w_lisa, dados_completos['media_por'])
             dados_completos['lag_ideb'] = lag_ideb
             
             fig, axes = plt.subplots(1, 3, figsize=(20, 6))
@@ -242,20 +244,18 @@ if uf_selecionada:
             
             # --- 6. ANÁLISE DE CLUSTERS LOCAIS (LISA) ---
             st.subheader("6. Análise de Clusters Locais (LISA)")
-            lisa = Moran_Local(y, w_escolhido_rainha)
+            lisa = Moran_Local(y, w_lisa)
             dados_completos['lisa_Is'] = lisa.Is
             dados_completos['quadrante'] = lisa.q
             dados_completos['valor_p'] = lisa.p_sim
 
             st.markdown("**Mapa de Valores LISA (I Local)**")
-            st.markdown("Este mapa mostra a intensidade do agrupamento para cada município. Valores altos (amarelo) indicam forte semelhança com os vizinhos, enquanto valores baixos (roxo) indicam dissimilaridade.")
             fig, ax = plt.subplots(figsize=(15, 10))
             dados_completos.plot(column='lisa_Is', cmap='viridis', scheme='quantiles', k=5, legend=True, ax=ax)
             ax.set_axis_off()
             st.pyplot(fig)
             
             st.markdown("**Mapa de Clusters LISA Significativos**")
-            st.markdown("Este é o mapa principal, mostrando apenas os agrupamentos que são estatisticamente significativos (p-valor < 0.05).")
             fig, ax = plt.subplots(figsize=(15, 10))
             dados_completos.plot(ax=ax, color='lightgray', edgecolor='black', linewidth=0.5)
             significativos = dados_completos[dados_completos['valor_p'] < 0.05]
