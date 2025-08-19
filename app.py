@@ -87,9 +87,9 @@ def calcular_pesos(uf_sigla, k):
         return None
     
     pesos = {
-        "Rainha": Queen.from_dataframe(gdf),
-        "Torre": Rook.from_dataframe(gdf),
-        f"KNN (k={k})": KNN.from_dataframe(gdf, k=k)
+        "Rainha": Queen.from_dataframe(gdf, use_index=True),
+        "Torre": Rook.from_dataframe(gdf, use_index=True),
+        f"KNN (k={k})": KNN.from_dataframe(gdf, k=k, use_index=True)
     }
     return pesos
 
